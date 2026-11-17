@@ -37,13 +37,18 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends procps pandoc git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN Rscript -e 'BiocManager::install(c("limma", "edgeR", "fgsea", "enrichplot"), ask = FALSE, update = FALSE)' \
-    && Rscript -e 'install.packages(c( \
-        "optparse", "ggplot2", "ggpubr", "ggrepel", "ggtext", "patchwork", "reshape2", "pheatmap", "plotly", \
-        "dplyr", "tidyr", "tibble", "stringr", "tidyverse", "scales", "data.table", "openxlsx", \
-        "gridExtra", "htmltools", "knitr", "rmarkdown", "formattable", "xfun", \
-        "enrichR", "msigdbr" \
-    ), repos = "https://cloud.r-project.org")'
+# CRAN packages come from a dated Posit Package Manager snapshot (Ubuntu 22.04 binaries) from the
+# Bioconductor 3.18 period: current CRAN has packages that need R >= 4.4 (e.g. Deriv, needed by
+# ggpubr via car/rstatix), and install.packages() only warns when one fails.
+ARG CRAN_SNAPSHOT=https://packagemanager.posit.co/cran/__linux__/jammy/2024-04-24
+ENV SPADE_R_PKGS="limma edgeR fgsea enrichplot optparse ggplot2 ggpubr ggrepel ggtext patchwork reshape2 pheatmap plotly dplyr tidyr tibble stringr tidyverse scales data.table openxlsx gridExtra htmltools knitr rmarkdown formattable xfun enrichR msigdbr"
+
+RUN Rscript -e "options(repos = c(CRAN = '${CRAN_SNAPSHOT}')); \
+        BiocManager::install(c('limma', 'edgeR', 'fgsea', 'enrichplot'), ask = FALSE, update = FALSE)" \
+    && Rscript -e "pkgs <- strsplit(Sys.getenv('SPADE_R_PKGS'), ' ')[[1]]; \
+        install.packages(setdiff(pkgs, rownames(installed.packages())), repos = '${CRAN_SNAPSHOT}'); \
+        bad <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; \
+        if (length(bad)) stop('R packages not installed: ', paste(bad, collapse = ', '))"
 
 RUN git clone https://github.com/hongjianjin/SPADE.git /tmp/SPADE \
     && cd /tmp/SPADE && git checkout "${SPADE_REF}" \
@@ -55,8 +60,9 @@ RUN git clone https://github.com/hongjianjin/SPADE.git /tmp/SPADE \
     && git rev-parse HEAD > /opt/spade/COMMIT \
     && rm -rf /tmp/SPADE
 
-# Fail the build if any SPADE function file cannot be sourced
-RUN Rscript -e 'for (f in list.files("/opt/spade/module", full.names = TRUE)) sys.source(f, envir = globalenv()); \
+# Fail the build if any package does not attach or any SPADE function file cannot be sourced
+RUN Rscript -e 'for (p in strsplit(Sys.getenv("SPADE_R_PKGS"), " ")[[1]]) suppressPackageStartupMessages(library(p, character.only = TRUE)); \
+        for (f in list.files("/opt/spade/module", full.names = TRUE)) sys.source(f, envir = globalenv()); \
         stopifnot(exists("ParallelDE2"), exists("run_fgsea"), exists("run_enrichr")); \
         stopifnot(rmarkdown::pandoc_available()); cat("SPADE", readLines("/opt/spade/VERSION"), "OK\n")'
 

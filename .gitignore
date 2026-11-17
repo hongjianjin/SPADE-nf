@@ -12,3 +12,4 @@ testing*
 null/
 *.sif
 .Rhistory
+/temp_test/
