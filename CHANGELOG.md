@@ -1,6 +1,13 @@
 # SPADE-nf: Changelog
 
-## v3.0.1 (unreleased)
+## v3.0.1
+
+**Container rebuilt (2026-11-17).** The first `ghcr.io/hongjianjin/spade:3.0.1` image lacked the R package
+`ggpubr`, so `SPADE_DE` failed with `there is no package called 'ggpubr'`. The image was rebuilt under the
+same tag from the fixed Dockerfile on `main` (CRAN pinned to a 2024-04-24 snapshot; the build now fails if a
+required package does not load). If you pulled the image before the rebuild, delete the cached copy, e.g.
+`rm $NXF_SINGULARITY_CACHEDIR/ghcr.io-hongjianjin-spade-3.0.1.img`. To rebuild the image yourself, use the
+Dockerfile from `main`, not from the `v3.0.1` tag.
 
 First version, wrapping SPADE 3.0.1 (https://github.com/hongjianjin/SPADE).
 
