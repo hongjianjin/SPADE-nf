@@ -1,6 +1,6 @@
 # Reference inputs cloned for development (not part of the pipeline)
-SPADE/
-RNAseqERCC/
+/SPADE/
+/RNAseqERCC/
 tmp_*
 .nextflow*
 work/
