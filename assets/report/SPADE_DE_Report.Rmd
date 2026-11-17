@@ -1,0 +1,447 @@
+---
+title: "`r if (identical(params$yaml$BRANDING, 'cab')) paste0('CAB Standardized RNA-Seq ', if (identical(params$objDEs$QC$normalization, 'ERCC')) '(ERCC-Normalized) ' else '', 'DE Analysis') else 'SPADE RNA-Seq Differential Expression Report'`"
+params:
+  objDEs: !r NULL
+  objPlots: !r NULL
+  yaml: !r NULL
+  bib_path: !r NULL
+  logo: !r NULL
+  enrichment: !r NULL
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 6
+    highlight: tango
+    number_sections: true
+always_allow_html: true
+bibliography: "`r params$bib_path`"
+nocite: '@*'
+---
+<!--
+  SPADE-nf report. Adapted from RNAseqERCC v1.1 stdRNAseqERCC.Report.v1.0.Rmd
+  (https://github.com/hongjianjin/RNAseqERCC). BRANDING = cab keeps the CAB text, logo and
+  wiki links (CAB internal); BRANDING = spade (default) is for external users.
+-->
+
+```{r setup, include=FALSE}
+yaml <- params$yaml
+cab <- identical(yaml$BRANDING, "cab")
+objDEs <- params$objDEs
+objPlots <- params$objPlots
+enrichment <- params$enrichment
+comps <- objDEs$comps
+pcaPlot0 <- objPlots[["pcaPlot0"]]
+pcaPlots <- objPlots[["pcaPlots"]]
+volcanoPlots <- objPlots[["volcanoPlots"]]
+maPlots <- objPlots[["maPlots"]]
+heatmaps <- objPlots[["heatmaps"]]
+isERCC <- identical(objDEs$QC$normalization, "ERCC")
+hasMap <- is.data.frame(objDEs$QC$mapStat)
+val <- function(k) { v <- yaml[[k]]; if (is.null(v) || is.na(v) || !nzchar(v)) "" else v }
+accent <- if (cab) "#FF7F00" else "#2C6E9B"
+suppressMessages({ library(ggplot2); library(knitr); library(dplyr); library(formattable); library(plotly); library(grid); library(gridExtra) })
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width = 7, fig.height = 7)
+statusTable <- function(df, col, good) {
+  as.character(format_table(df, setNames(list(formatter("span", style = x ~ formattable::style(color = ifelse(x == good, "green", "brown")))), col), format = "html"))
+}
+```
+
+<style type="text/css">
+:root { --accent: `r accent`; }
+h1.title { margin-top: 130px; margin-bottom: 25px; font-size: 36px; }
+.reporthead { font-size: 20px; }
+body { font-size: 16px; font-family: Arial, Helvetica, sans-serif; }
+h1 { color: var(--accent); font-size: 28px; margin-top: 50px; }
+h2 { color: var(--accent); font-size: 20px; }
+h3 { color: var(--accent); font-size: 18px; }
+h4 { color: var(--accent); font-size: 16px; }
+.list-group-item.active, .list-group-item.active:focus, .list-group-item.active:hover { background-color: var(--accent); }
+</style>
+
+```{r logo}
+logoTag <- htmltools::img(src = xfun::base64_uri(params$logo), alt = "logo",
+  style = "position:absolute; top:0; left:0; padding:0px; height:120px;")
+htmltools::a(href = if (cab) "https://wiki.stjude.org/display/CAB" else "https://github.com/hongjianjin/SPADE", logoTag)
+```
+
+```{r header, results="asis"}
+line <- function(label, key, bold = FALSE) {
+  v <- val(key); if (!nzchar(v)) return(invisible())
+  cat(if (bold) paste0("**", label, ": ", v, "**  \n") else paste0(label, ": ", v, "  \n"))
+}
+cat('<div class="reporthead"><br/>\n\n')
+line("PI", "PI_NAME", TRUE); line("Project", "PROJECT_NAME", TRUE); line("Task", "TASK_ID")
+line("Project Lead(s)", "PROJECT_LEAD_NAME"); line("Department", "DEPARTMENT")
+if (cab) {
+  cat("<br />\n\nCAB Analysis Team:\n<br />\n\n")
+  cat(">**Lead Analyst(s): ", val("LEAD_ANALYSTS"), "**  \n>Group Lead: ", val("GROUP_LEAD"), "  \n<br />\n>**Contact E-mail:** ", val("CONTACT_EMAIL"), "  \n", sep = "")
+  cat(">**CAB Pipeline:** ", val("PIPELINE"), "  \n\n", sep = "")
+} else {
+  line("Analyst(s)", "LEAD_ANALYSTS"); line("Contact", "CONTACT_EMAIL")
+  cat("**Pipeline:** ", val("PIPELINE"), "  \n\n", sep = "")
+}
+line("Date started", "START_DATE"); line("Date completed", "COMPLETION_DATE")
+cat("Report generated: ", format(Sys.time(), "%H:%M:%S %Z %m/%d/%Y"), "\n\n</div>\n", sep = "")
+```
+
+# Overview
+
+```{r overview, results="asis"}
+if (cab) {
+  cat("Thank you for using the Center For Applied Bioinformatics (CAB) for your RNA-Seq ERCC analysis.",
+      if (nzchar(val("MAPPING_QC"))) paste0(" Our standard quality assessments indicate that the sequence data were of **", val("MAPPING_QC"), "** quality for the purpose of data analysis.") else "",
+      "\n\nWe have provided the results of our standardized pipeline below for your review. After reviewing these results, please feel free to contact us at cab.helpdesk@stjude.org with any questions or concerns. We are also available to discuss continuing and customized analysis options.\n", sep = "")
+} else {
+  cat("This report summarizes a bulk RNA-seq differential expression analysis run with [SPADE](https://github.com/hongjianjin/SPADE)",
+      " (Spike-in Powered Analysis of Differential Expression and Enrichment) through the SPADE-nf Nextflow pipeline.",
+      " It covers sample QC, ", if (isERCC) "ERCC spike-in QC and ERCC normalization, " else "",
+      "limma-voom differential expression for each comparison, and gene set enrichment when it was run.\n", sep = "")
+}
+cat("\n**Normalization used: ", if (isERCC) "ERCC spike-in" else "library size (TMM)", ".** ", objDEs$QC$ercc_note, "\n", sep = "")
+```
+
+# Methods
+
+```{r methods-intro, results="asis"}
+if (cab) {
+  cat("While analytical methods and laboratory technologies continue to evolve, RNA-seq analysis has now matured to the point where a number of best practices have emerged. The CAB has developed standardized analysis protocols, incorporating community best practices as well as accumulated in-house expertise. The procedures used to generate your results are outlined below, with additional detail available in referenced publications and linked [CAB Wiki page](https://wiki.stjude.org/display/CAB/RNAseq+differential+gene+expression+analysis).\n")
+} else {
+  cat("The procedures used to generate these results are outlined below, with additional detail in the referenced publications and the [SPADE documentation](https://github.com/hongjianjin/SPADE).\n")
+}
+```
+
+```{r methods-mapping, results="asis"}
+if (cab) {
+  cat("\n## Mapping and Counting\n\nRead alignment to the reference genome was performed with STAR (version 2.7; PMID: 23104886) software. Gene level quantification was determined using RSEM (version 1.3.1 ; PMID: 21816040). CAB implemented these steps in AutoMapper, a pipeline uses the most recent versions of the reference sequence and annotation files  [AutoMapper Reference Library](https://wiki.stjude.org/display/CAB/Reference+Library). Please see the associated [AutoMapper Wiki page](https://wiki.stjude.org/display/CAB/AutoMapper) for detailed information regarding software parameters and workflows . Note that the differential expression reported here may differ from those obtained by the St. Jude Cloud pipeline; this is expected behavior, as the cloud pipeline employs alternate methods and parametrization.\n")
+} else {
+  cat("\n## Input\n\nThe analysis started from a gene-level raw count matrix (", val("COUNT_FILE"), ") and a sample metadata file (", val("META_FILE"), ").\n", sep = "")
+}
+```
+
+## Quality Control
+To evaluate the quality of the data, we generated `r if (hasMap) "a mapping QC matrix, " else ""`library size, relative log expression (RLE)`r if (isERCC) ", ERCC QC" else ""` and principal component analysis (PCA) plots for all samples.
+
+```{r methods-mapqc, results="asis"}
+if (hasMap) {
+  cat("\n### Mapping QC\n\n")
+  if (cab) {
+    cat("Your samples were aligned to reference genome  [**", val("SPECIES"), "**](https://wiki.stjude.org/display/CAB/Reference+Library). \\\nAlignment statistics and additional details on the automapping procedure and explanations for reported summary statistics outputs are available on our wiki page: [CAB AutoMapper](https://wiki.stjude.org/display/CAB/AutoMapper).\n", sep = "")
+  } else {
+    cat("Alignment statistics come from the mapping report provided with the input.\n")
+  }
+}
+if (isERCC) {
+  cat("\n### ERCC QC\n\n")
+  cat('In RNA-seq, the "ideal" ERCC spike-in ratio is one that is high enough to cover a wide dynamic range but low enough that it doesn\'t "waste" your sequencing depth on synthetic molecules. For a standard experiment, the general target is to have 1% to 2% of your total sequencing reads map to the ERCC controls. The "ideal" ratio can shift significantly depending on your library prep method. To determine if your ERCC (External RNA Controls Consortium) spike-ins are reliable enough to quantify global transcriptional changes (often called "global scaling" or "cell number normalization"), We need to validate several technical metrics:\n\n')
+  cat(" 1. The correlation between the known input concentration of each ERCC transcript and the observed counts;  We expect an Pearson or Spearman correlation **R^2 > 0.90** (ideally > 0.95).\n")
+  cat(" 2. Consistency Across Replicates. Before using ERCCs to normalize between treatment groups, you must ensure they are consistent within the same group. Coefficient of Variation of ERCC counts across biological replicates should be low (typically **CV% < 15%** ).\n")
+  cat(" 3. Shift Test:  If Treatment A has a significantly higher ratio than Treatment B, it suggests that Treatment A has less total endogenous RNA (assuming equal spike-in amounts). If this ratio is identical across all groups, you may not have a global change, or the change is too subtle for ERCCs to capture. A robust global shift is defined by the 'Shift Test' thresholds. A shift is called when ERCC spike-in ratios show strong group separation by AUC and sufficient fold-change magnitude: **AUC >= 0.9 and Fold Shift >= 1.5**, or the opposite direction, **AUC <= 0.1 and Fold Shift <= 0.667**.\n")
+}
+```
+
+### Library size and RLE
+Library size is the total number of reads counted per sample. In a relative log expression (RLE) plot, each gene's log2CPM is centered on its median across samples; without technical effects, the boxes are centered around zero and have similar sizes.
+
+### PCA
+The top **`r yaml$NUM_GENE_PCA`** most variable (and informative) genes from your data set were used to perform PCA.  PCA is an unsupervised algorithm that facilitates data exploration and quality assessment. The principal components identified in this analysis represent axes of variation within the data. In the context of RNA-seq, technical replicates are expected to cluster together, while biological replicates may show more variation on the level of underlying heterogeneity.  Deviation from expected clustering patterns may indicate problems with underlying data. Principal components analysis was performed using <em>prcomp</em> function, available as part of the standard R distribution.
+
+## Differential Analysis
+```{r cutoff}
+cc <- suppressWarnings(as.numeric(val("CUTOFF_COUNT"))); cp <- suppressWarnings(as.numeric(val("CUTOFF_CPM")))
+cc[is.na(cc)] <- 0; cp[is.na(cp)] <- 0
+settingVersion <- if (cc == 0 && cp == 0) "default cutoff" else "custom cutoff"
+cutoff <- if (cp == -1) "**no low-expression filter**" else if (cp > 0) paste0("**CPM >  ", cp, "** [", settingVersion, "]") else if (cc > 0) paste0("**raw read count > ", cc, "** [", settingVersion, "]") else paste0("**raw read count > median.library.size/10e6 (i.e., CPM>0.1)** [", settingVersion, "]")
+filterNC <- isTRUE(objDEs$settings$filter)
+```
+
+```{r methods-input, results="asis"}
+if (cab) {
+  cat("1. **Input Files**\\\nThe standard RNA-Seq Analysis Pipeline requires three files for each SRM from the [CAB AutoMapper](https://wiki.stjude.org/display/CAB/AutoMapper) output directory:\n    * The mapping statistics:  {SRM}.report\n    * The raw count matrix: {SRM}_RSEM_count.txt\n    * The TPM matrix: {SRM}_RSEM_TPM.txt\n\n")
+} else {
+  cat("1. **Input Files**\\\nA raw gene count matrix (geneID, geneSymbol and optional bioType/annotationLevel columns, then one column per sample) and a metadata file with ID, NEWNAME and GROUP columns.\n\n")
+}
+cat("2. **Data Preparation**\\\nFiltration steps prior to analysis to ensure that the quality results are obtained:\n")
+cat(if (filterNC) "    * non-coding genes are excluded. Only use protein-coding genes (when bioType/annotationLevel columns are present).\n" else "    * non-coding genes are kept (gene filtering by bioType was disabled).\n")
+cat("    * genes with very low expression values are also removed. Only include genes that pass ", cutoff, " in the smallest sample-size group involved in pairwise comparison.\n\n", sep = "")
+cat("3. **DE Analysis and Normalization**\\\nDifferential gene expression was modeled using the $voom$ method within the $limma$ R software package (PMID: 24485249).")
+if (isERCC) {
+  cat(" To account for potential global shifts in RNA abundance, we implemented a **Cell Number-Normalized (CNN)** approach using ERCC spike-ins.\\\n\nValues for spike-in normalization were then determined from ERCC counts, corrected for the overall endogenous gene library size ($N$) using the $calcNormFactors$ function from the $edgeR$ package. These CNN factors ($nf$) were utilized to adjust the gene counts during the limma-voom transformation by specifying an effective library size of $N \\times nf$.\\\n\n")
+} else {
+  cat(" Library sizes were normalized with the trimmed mean of M-values (TMM) method from the $edgeR$ package before the limma-voom transformation.\\\n\n")
+}
+cat("When BATCH or GENDER columns are present in the metadata with more than one level, they are included in the design matrix.\\\n\n")
+cat("In this report, we use cutoffs of **P.Value < ", val("CUTOFF_PVALUE"), ", FDR < ", val("CUTOFF_FDR"), ", and/or absolute log2FC > ", val("CUTOFF_LOG2FC"), "** to define differentially expressed genes (DEGs). The number of DEGs for every comparison are subsequently summarized in a table. Please note that the numbers of DEGs resulting from an analysis will change, depending on the value used for cutoffs. The top DEGs are defined by the cutoff of **FDR < ", val("CUTOFF_FDR"), "** and ranked by the fold change (FC) in descending order.\\\n\n", sep = "")
+if (cab) {
+  cat("The CAB RNA-Seq analysis requires at least **2** biological replicates in every group for pairwise comparison in order to compute statistically valid P value. If you do not have replicates for one or more groups, please submit a customized analysis request to the CAB Transcriptomics group so that we can contact you regarding alternative analysis options.\n")
+} else {
+  cat("At least **2** biological replicates per group are required for each pairwise comparison.\n")
+}
+```
+
+```{r methods-enrich, results="asis"}
+hasF <- is.data.frame(enrichment$fgsea); hasE <- is.data.frame(enrichment$enrichr)
+if (hasF || hasE) {
+  cat("\n## Enrichment Analysis\n\n")
+  if (hasF) cat("* **fGSEA**: genes were ranked by ", val("FGSEA_RANK_METRIC"), " from the DE table and tested against MSigDB ", val("MSIGDB_VERSION"), " gene sets (", val("FGSEA_GENE_SETS"), ") with the $fgsea$ package (minimum gene set size 15). Pathways with P < 0.05 are reported.\n", sep = "")
+  if (hasE) cat("* **Enrichr**: the top up- and down-regulated genes were submitted separately to the Enrichr web service (libraries: ", val("ENRICHR_DBS"), "). Terms with P < 0.05 are reported.\n", sep = "")
+}
+```
+
+## Data Visualizations
+
+For each comparison (experimental vs control samples), we visualized the results of differential analysis in multiple ways. The DEGs will be highlighted in red (up-regulated in experimental group) or blue (down-regulated in experimental group). The top **`r yaml$NUM_DEG_TOPN`** DEGs will be labeled. Brief descriptions of the visualizations included in your report are provided below.
+
+1. **PCA**\
+Principle components analysis (PCA) is an unsupervised clustering procedure that can be used for quality evaluation. We employ top **`r yaml$NUM_GENE_PCA`** most variable and informative genes within samples to peform PCA for each pairwise comparison. The resulting plot can indicate if the variation in your data clusters with experimental conditions and/or sample type, or if the samples cluster in a way that is more suggestive of technical artifacts related to conditions such as the date of sequencing, sample preparation, etc.
+`r if (isERCC) "\n2. **ERCC QC**\\\nWe provide the technical metrics of ERCC in detail for each comparison.\n" else ""`
+3. **Volcano Plot**\
+We plot log2 fold change [x axis, log2FC] vs negative log10 P.Value [y axis, -log10(P.Value)] for every pairwise comparison. The volcano plot allows you to quickly determine if your significantly differentially expressed genes fall are associated with high changes in fold coverage. P.Values of exactly zero are replaced with the smallest non-zero p-value in the dataset. This adjustment prevents mathematical errors during $-log10$ transformation while preserving the relative significance of the most highly differentially expressed genes.
+
+4. **MA Plot**\
+The plot visualizes the differences between measurements taken in two samples, by transforming the data onto M (log2 ratio, log2FC) and A (mean average, log2AveExpr) scales, then plotting these values.
+
+5. **Heatmap**\
+The color key represents log2CPM value of gene expression. By default, the heatmap displays the top **`r yaml$NUM_DEG_TOPN`** DEGs. If fewer genes meet the cutoff thresholds, the heatmap will be generated using the available genes.
+
+# Results
+
+```{r results-paths, results="asis"}
+if (cab) {
+  od <- val("OUTPUT_DIR")
+  if (any(grepl("rgs01/project_space/", od))) {
+    projectSpace <- unlist(strsplit(od, "project_space"))[2]
+    PC <- paste0("\\\\gsc.stjude.org\\project_space", gsub("/", "\\\\", projectSpace)); Mac <- paste0("smb://gsc.stjude.org/project_space", projectSpace)
+  } else if (any(grepl("/research_jude/rgs01_jude/", od))) {
+    projectSpace <- unlist(strsplit(od, "rgs01_jude"))[2]
+    PC <- paste0("\\\\jude.stjude.org\\project_space", gsub("/", "\\\\", projectSpace)); Mac <- paste0("smb://jude.stjude.org/project_space", projectSpace)
+  } else if (any(grepl("/research/groups/", od))) {
+    projectSpace <- gsub("/research/groups/", "/groups/", od)
+    PC <- paste0("\\\\jude.stjude.org\\project_space", gsub("/", "\\\\", projectSpace)); Mac <- paste0("smb://jude.stjude.org/project_space", projectSpace)
+  } else {
+    PC <- "\\\\jude.stjude.org\\groups\\project_space or \\\\gsc.stjude.org\\project_space"
+    Mac <- "smb://jude.stjude.org/groups\\project_space or smb://gsc.stjude.org/project_space"
+  }
+  cat("All results associated with your data analysis have been deposited to the following locations. For your convenience, paths to the data are provided below for those using Linux (through HPCF), Windows, and Mac OS. Note that these paths correspond to the same storage space and do not represent multiple data copies.\\\n\n")
+  cat("HPCF: <font size='3'><span style='color:blue'>`", od, "`</span></font>\\\nPC:  <font size='3'><span style='color:SlateBlue'>`", PC, "`</span></font>\\\nMac:  <font size='3'><span style='color:purple'>`", Mac, "`</span></font>\\\n\n", sep = "")
+} else {
+  cat("All result files are in the pipeline output directory", if (nzchar(val("OUTPUT_DIR"))) paste0(" (`", val("OUTPUT_DIR"), "`)") else "", "; see the pipeline's docs/output.md for a description of each file.\n\n", sep = "")
+}
+```
+
+## Quality Control
+
+```{r mapqc-tables, results="asis"}
+if (hasMap) {
+  cat("\n### Mapping QC\n\n")
+  mapStat <- objDEs$QC$mapStat
+  mapStat[, "STATUS"] <- gsub(" ", "", mapStat[, "STATUS"])
+  pct_colName <- intersect(c("MAPPED", "DUPLICATION", "UNMAPPED", "BASE_CODING", "BASE_UTR", "BASE_INTRON", "BASE_INTERGENIC", "BASE_RIBOSOMAL"), colnames(mapStat))
+  mapStat[, pct_colName] <- apply(mapStat[, pct_colName, drop = FALSE], 2, function(x) paste0(x, "%"))
+  c1 <- intersect(c("SAMPLE", "GROUP", "STATUS", "READS_RAW", "READS_TRIMMED", "READS_MAPPED", "FRAGMENT_COUNT", "DUPLICATION", "UNMAPPED"), colnames(mapStat))
+  c2 <- intersect(c("SAMPLE", "GROUP", "STATUS", "MAPPED", "BASE_CODING", "BASE_UTR", "BASE_INTRON", "BASE_INTERGENIC", "BASE_RIBOSOMAL"), colnames(mapStat))
+  mapStat1 <- mapStat[, c1]; mapStat2 <- mapStat[, c2]
+  colnames(mapStat1) <- gsub("READS_", "", sub("FRAGMENT_COUNT", "COUNT", colnames(mapStat1)))
+  colnames(mapStat2) <- gsub("BASE_", "", colnames(mapStat2))
+  cat('<div align="left" style="font-size:75%">\n\n')
+  cat(statusTable(mapStat1, "STATUS", "PASS"), "
+")
+  cat(statusTable(mapStat2, "STATUS", "PASS"), "
+")
+  cat("\n</div>\n\n<font size='1'>**Notes**: RAW: reads in the original FASTQs. TRIMMED: reads after adapter trimming. MAPPED: uniquely and multiply mapped reads, excluding reads mapped to too many loci. UNMAPPED: too many mismatches, too short, or other. COUNT: fragment counts for coding genes.</font>\n\n")
+}
+```
+
+### Library size
+
+```{r libsize, fig.width=8, fig.height=5}
+if (!is.null(objPlots$libSizePlot)) print(objPlots$libSizePlot)
+```
+
+### RLE
+
+```{r rle, fig.width=8, fig.height=5}
+if (!is.null(objPlots$rlePlot)) print(objPlots$rlePlot)
+```
+
+```{r ercc-qc, results="asis"}
+if (isERCC) {
+  cat("\n### ERCC QC\n\n**ERCC QC1, Level, Correlation & $nf$**\\\nThis step calculates ERCC spike-in level, normalization factor($nf$) and correlation to check the Does-Response of ERCC transcripts.\n\n")
+  ErccStat <- objDEs$QC$ErccStat
+  ErccStat$STATUS <- ifelse(!is.na(ErccStat$ERCC_COR) & ErccStat$ERCC_COR >= 0.9, "PASS", "WARN")
+  rownames(ErccStat) <- NULL
+  cat('<div align="left" style="font-size:75%">\n\n')
+  cat(statusTable(ErccStat, "STATUS", "PASS"), "
+")
+  cat("\n\n<font size='1'>**Note**: pct_ERCC: ERCC spike-in percentage (%) should be between **0.5% to 5%** in normal condition (control group), ideally 1%-2%. nf_ERCC: ERCC normalization factor used to adjust sample library size during differential analysis. RNA_index: gene_libSize / ERCC_libSize. ERCC_COR: Pearson correlation between the known input concentration of each ERCC transcript and the observed counts should be **>0.9**, ideally >0.95.</font>\n</div>\n\n")
+  cat("**ERCC QC2, Consistency Across Replicates:**\\\nBefore using ERCCs to normalize between treatment groups, you must ensure they are consistent within the same group.\n\n")
+  ErccCV <- as.data.frame(objDEs$QC$ErccCV)
+  ErccCV$STATUS <- ifelse(ErccCV$ERCC_cv > 15, "WARN", "PASS")
+  cat('<div align="left" style="font-size:75%">\n\n')
+  cat(statusTable(ErccCV, "STATUS", "PASS"), "
+")
+  cat("\n\n<font size='1'>**Note**: ERCC_mean: acceptable range of mean ERCC spike-in ratio should be 0.5%-5% in normal condition (control group), ideally 1%-2%. ERCC_cv: Coefficient of Variation (CV%) of ERCC spike-in ratio across biological replicates should be low (typically < 15%).</font>\n</div>\n\n")
+  cat("**ERCC QC3, Shift Test:**\\\nTo detect a true global transcriptional change, the ERCCs must behave differently between groups than the endogenous RNA.\n\n")
+  ErccShift <- as.data.frame(objDEs$QC$ErccShift)
+  shift_idx <- !is.na(ErccShift$AUC) & !is.na(ErccShift$Shift_FC) & ((ErccShift$AUC >= 0.9 & ErccShift$Shift_FC >= 1.5) | (ErccShift$AUC <= 0.1 & ErccShift$Shift_FC <= 0.667))
+  ErccShift$SHIFT <- ifelse(shift_idx, "TRUE", "FALSE")
+  ErccShift <- ErccShift[, c(setdiff(colnames(ErccShift), "SHIFT"), "SHIFT")]
+  rownames(ErccShift) <- gsub("C", "Comparison", names(comps))
+  cat('<div align="left" style="font-size:75%">\n\n')
+  cat(statusTable(ErccShift, "SHIFT", "TRUE"), "
+")
+  cat("\n\n<font size='1'>**Criteria for Robust Global Shift**: Shift_FC: fold change of mean ERCC spike-in ratio between two groups; a robust forward shift requires Shift_FC >= 1.5, a robust opposite-direction shift Shift_FC <= 0.667. AUC: rank-based separation of ERCC spike-in ratios between group1 and group2; AUC >= 0.9 supports a forward shift, AUC <= 0.1 an opposite-direction shift. Shift_PVAL and group CV are supporting QC metrics, not required for the SHIFT call.</font>\n</div>\n\n")
+}
+```
+
+```{r pca-var}
+lbls <- pcaPlot0[["labels"]]
+pctOf <- function(l) as.numeric(gsub("%", "", unlist(strsplit(l, "[()]"))[2]))
+varExplained0 <- tryCatch(pctOf(lbls$x) + pctOf(lbls$y), error = function(e) NA)
+```
+
+### PCA
+Principal Component Analysis of all samples indicates that <span style="color:blue">**`r varExplained0` %** </span>of the total variance are explained by the first two principle components (PC1+PC2).
+
+```{r pca0, fig.align="left", results="asis"}
+ggplotly(pcaPlot0, width = 700, height = 600, tooltip = c("text"))
+```
+
+## Differential Analysis
+
+<div align="center" style="font-size:80%">
+
+```{r summary}
+table3 <- objDEs$statDEGs
+table3$ID <- gsub("C", "Comparison", table3$ID)
+knitr::kable(table3, caption = "Summary of comparisons")
+```
+
+</div>
+
+## Data Visualizations
+```{r per-comparison, fig.align="left", results="asis"}
+pcaPlotList <- lapply(names(comps), function(x) ggplotly(pcaPlots[[x]], width = 600, height = 500, tooltip = c("text")) %>% toWebGL())
+deps1 <- lapply(Filter(function(x) inherits(x, "htmlwidget"), pcaPlotList), function(hw) htmltools::renderTags(hw)$dependencies)
+htmltools::attachDependencies(x = htmltools::tagList(), value = unlist(deps1, recursive = FALSE))
+
+for (n in seq_along(comps)) {
+  compName <- names(comps)[n]
+  section_count <- 1
+  cat(paste("  \n### Comparison ", n, ": ", gsub("_vs_", " vs ", comps[[compName]], ignore.case = TRUE), "  \n"))
+  if (length(comps) > 1) {
+    lb <- pcaPlots[[compName]][["labels"]]
+    varExplained <- tryCatch(pctOf(lb$x) + pctOf(lb$y), error = function(e) NA)
+    cat(paste0("  \n", section_count, ". **Principal Components Analysis (<span style=\"color:blue\">", varExplained, " % </span>of total variance explained by PC1+PC2)**  \n"))
+    sz <- objDEs$statDEGs[n, "sample_size"]
+    grpSize <- sum(as.numeric(unlist(strsplit(sz, if (grepl(" vs ", sz)) " vs " else " , "))))
+    if (is.na(grpSize) || grpSize <= 20) print(pcaPlots[[compName]]) else cat(htmltools::renderTags(as.widget(pcaPlotList[[n]]))$html)
+    section_count <- section_count + 1
+  }
+  if (isERCC) {
+    cat(paste0("  \n", section_count, ". **ERCC Level**  \n"))
+    ErccStat1 <- objDEs$allDE[[compName]]$ErccStat
+    if (is.data.frame(ErccStat1)) {
+      ErccStat1$STATUS <- ifelse(!is.na(ErccStat1$ERCC_COR) & ErccStat1$ERCC_COR >= 0.9, "PASS", "WARN")
+      cat("  \n<div align=\"center\" style=\"font-size:80%\">  \n")
+      print(knitr::kable(ErccStat1, caption = "ERCC Level", row.names = FALSE))
+      cat("  \n</div>  \n")
+    }
+    section_count <- section_count + 1
+    ErccShift1 <- as.data.frame(objDEs$allDE[[compName]]$ErccShift)
+    cat(paste0("  \n", section_count, ". **ERCC Shift Test**  \n"))
+    if (nrow(ErccShift1) == 0 || any(is.na(ErccShift1))) {
+      cat(paste("  \n  The Shift Test was skipped or not applicable for this comparison: ", compName, " \n"))
+    } else {
+      idx <- !is.na(ErccShift1$AUC) & !is.na(ErccShift1$Shift_FC) & ((ErccShift1$AUC >= 0.9 & ErccShift1$Shift_FC >= 1.5) | (ErccShift1$AUC <= 0.1 & ErccShift1$Shift_FC <= 0.667))
+      ErccShift1$SHIFT <- ifelse(idx, "TRUE", "FALSE")
+      ErccShift1 <- ErccShift1[, c(setdiff(colnames(ErccShift1), "SHIFT"), "SHIFT")]
+      colnames(ErccShift1)[1] <- "comparison"
+      cat("  \n<div align=\"center\" style=\"font-size:80%\">  \n")
+      print(knitr::kable(ErccShift1, caption = "ERCC Shift Test", row.names = FALSE))
+      cat("  \n</div>  \n")
+    }
+    section_count <- section_count + 1
+  }
+  cat(paste0("  \n", section_count, ". **The number of DEGs**", "  \n"))
+  cat("  \n<div align=\"center\" style=\"font-size:80%\">  \n")
+  print(knitr::kable(objDEs$numDEGs[[compName]], caption = "Summary of DEGs", row.names = FALSE))
+  cat("  \n</div>  \n")
+  section_count <- section_count + 1
+  cat(paste0("  \n", section_count, ". **Volcano Plot**  \n"))
+  if (!is.null(volcanoPlots[[compName]])) print(volcanoPlots[[compName]])
+  section_count <- section_count + 1
+  cat(paste0("  \n", section_count, ". **MA Plot**  \n"))
+  if (!is.null(maPlots[[compName]])) print(maPlots[[compName]])
+  section_count <- section_count + 1
+  cat(paste0("  \n", section_count, ". **Heatmap**  \n"))
+  hm1 <- heatmaps[[compName]]
+  if (!is.null(hm1) && !identical(hm1, NA)) {
+    grid.newpage(); grid.draw(arrangeGrob(grobs = list(hm1)))
+  } else {
+    cat("  \n No genes passed the cutoff of FDR < ", yaml$CUTOFF_FDR, ".  \n")
+  }
+  cat("  \n")
+}
+```
+
+```{r enrichment, results="asis"}
+topN <- if (!is.null(enrichment$top_n)) enrichment$top_n else 10
+fg <- enrichment$fgsea; en <- enrichment$enrichr
+if (is.data.frame(fg) || is.data.frame(en)) cat("\n## Enrichment\n\n")
+if (is.data.frame(fg)) {
+  cat("\n### fGSEA\n\nTop ", topN, " pathways per gene set by P value (P < 0.05). Full tables: `*_fgsea_results.xlsx` and `enrichment/fgsea/`.\n\n", sep = "")
+  if (nrow(fg) == 0) cat("No pathways passed P < 0.05.\n\n")
+  for (cmp in unique(fg$comparison)) {
+    cat("\n#### ", cmp, "\n\n", sep = "")
+    for (gs in unique(fg$gene_set[fg$comparison == cmp])) {
+      s <- fg[fg$comparison == cmp & fg$gene_set == gs, c("pathway", "NES", "pval", "padj", "size")]
+      s <- head(s[order(s$pval), ], topN)
+      s$pval <- signif(s$pval, 3); s$padj <- signif(s$padj, 3); s$NES <- round(s$NES, 2)
+      print(knitr::kable(s, caption = gs, row.names = FALSE))
+      cat("\n")
+    }
+  }
+}
+if (is.data.frame(en)) {
+  cat("\n### Enrichr\n\nTop ", topN, " terms per library and direction by P value (P < 0.05). Full tables: `enrichment/enrichr/`.\n\n", sep = "")
+  pcol <- intersect(c("P.value", "P.Value", "Pvalue"), colnames(en))[1]
+  if (nrow(en) == 0 || is.na(pcol)) cat("No terms passed P < 0.05.\n\n") else {
+    for (cmp in unique(en$comparison)) {
+      cat("\n#### ", cmp, "\n\n", sep = "")
+      for (lib in unique(en$library[en$comparison == cmp])) for (d in c("up", "down")) {
+        s <- en[en$comparison == cmp & en$library == lib & en$direction == d, ]
+        if (nrow(s) == 0) next
+        s <- head(s[order(s[[pcol]]), intersect(c("Term", "Overlap", pcol, "Adjusted.P.value", "Combined.Score"), colnames(s))], topN)
+        print(knitr::kable(s, caption = paste0(lib, " (", d, ")"), row.names = FALSE, digits = 4))
+        cat("\n")
+      }
+    }
+  }
+}
+```
+
+# Additional Resources
+**ENCODE Guidelines**\
+[Version 1 (2011)](https://genome.ucsc.edu/ENCODE/protocols/dataStandards/ENCODE_RNAseq_Standards_V1.0.pdf) or [Version 2 (2016)](https://www.encodeproject.org/documents/cede0cbe-d324-4ce7-ace4-f0c3eddf5972/@@download/attachment/ENCODE%20Best%20Practices%20for%20RNA_v2.pdf)\
+<br/>
+
+**Integrative Genomics Viewer (IGV)**\
+[IGV](https://software.broadinstitute.org/software/igv/) is a high-performance visualization tool for interactive exploration of large, integrated genomic datasets. It supports a wide variety of data types, including array-based and next-generation sequence data, and genomic annotations. You can directly load the bigwig coverage file to examine specific gene loci for their coverage depths, which is an indication of expression level.\
+<br/>
+
+**UCSC Genome Browser**\
+[The UCSC Genome Browser](https://genome.ucsc.edu/) has provided free, public genome visualization since the first working draft of the human genome assembly.\
+<br/>
+
+```{r faq, results="asis"}
+if (cab) {
+  cat("**FAQ**\\\nPlease refer [RNAseq ERCC Spike-In Wikipage](https://wiki.stjude.org/display/CAB/Incorporating+ERCC+spike-in+in+RNA-Seq+experiment) for experimental considerations. If you have question about the analysis procedure or results, several of the most frequently asked questions  that we receive have answers provided on the [CAB Wiki page](https://wiki.stjude.org/display/CAB/RNAseq+differential+gene+expression+analysis). If you can't find an answer to your question on the wiki, or you wish to discuss follow-up analyses, please contact us at cab.helpdesk@stjude.org.\n\n")
+  cat("# Acknowledgements\n\n**The Center for Applied Bioinformatics is supported by the National Cancer Institute, Cancer Center Support Grant P30 CA21765 and ALSAC**. All manuscripts used from this report must acknowledge these two funding resources. We would also appreciate the title and journal name of the resulting manuscript to be forwarded to cab.helpdesk@stjude.org to help both non-and competitive renewals of the SJCRH Cancer Center grant.\n\n")
+} else {
+  cat("**SPADE**\\\nSource code, the interactive Shiny app and an FAQ: [github.com/hongjianjin/SPADE](https://github.com/hongjianjin/SPADE). Pipeline: [github.com/hongjianjin/SPADE-nf](https://github.com/hongjianjin/SPADE-nf).\n\n")
+}
+```
+
+# References

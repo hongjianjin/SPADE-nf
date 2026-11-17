@@ -1,0 +1,14 @@
+# Reference inputs cloned for development (not part of the pipeline)
+SPADE/
+RNAseqERCC/
+tmp_*
+.nextflow*
+work/
+results/
+results_test*/
+testing/
+testing*
+*.pyc
+null/
+*.sif
+.Rhistory

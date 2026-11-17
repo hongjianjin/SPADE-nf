@@ -1,0 +1,3 @@
+srm,counts,report,tpm,fpkm
+SRM1234,/path/to/SRM1234/SRM1234_RSEM_count.txt,/path/to/SRM1234/SRM1234.report,,
+SRM5678,/path/to/SRM5678/SRM5678_RSEM_count.txt,/path/to/SRM5678/SRM5678.report,,

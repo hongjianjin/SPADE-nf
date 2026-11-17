@@ -1,0 +1,509 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://raw.githubusercontent.com/hongjianjin/SPADE-nf/main/nextflow_schema.json",
+    "title": "SPADE-nf pipeline parameters",
+    "description": "ERCC spike-in aware RNA-seq differential expression and enrichment with SPADE",
+    "type": "object",
+    "$defs": {
+        "input_output_options": {
+            "title": "Input/output options",
+            "type": "object",
+            "fa_icon": "fas fa-terminal",
+            "description": "Count matrix, sample metadata and where to save results.",
+            "properties": {
+                "counts": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "Raw gene count matrix (tab-delimited): geneID and/or geneSymbol, optional bioType and annotationLevel, then one column per sample. Rows whose symbol starts with ERCC- are spike-ins.",
+                    "fa_icon": "fas fa-table",
+                    "help_text": "Same format as the SPADE Shiny app (e.g. RSEM gene counts). Required unless --cab_internal with --input or --automapper_dir."
+                },
+                "meta": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "Sample metadata (tab-delimited) with ID, NEWNAME and GROUP columns; optional COLOR, BATCH, GENDER, SHAPE.",
+                    "fa_icon": "fas fa-file-alt",
+                    "help_text": "ID must match the count-matrix column names. Only letters, digits, '.', '_' and '-' are allowed in ID, NEWNAME and GROUP. BATCH (or GENDER) with more than one level is added to the limma design."
+                },
+                "comparisons": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "Comparison list, one Exp_vs_Ctl per line (both groups from GROUP). All pairs of groups if omitted.",
+                    "fa_icon": "fas fa-list",
+                    "help_text": "log2FC is Exp relative to Ctl. Limma contrast formulas such as name=(A-B) are also accepted."
+                },
+                "species": {
+                    "type": "string",
+                    "description": "Species of the count matrix; checked against gene IDs/symbols and used to pick MSigDB human or mouse gene sets.",
+                    "enum": [
+                        "human",
+                        "mouse",
+                        "other"
+                    ],
+                    "fa_icon": "fas fa-paw",
+                    "help_text": "Use other for any other species; fgsea then needs --custom_gmt."
+                },
+                "outdir": {
+                    "type": "string",
+                    "description": "The output directory where the results will be saved. You have to use absolute paths to storage on Cloud infrastructure.",
+                    "format": "directory-path",
+                    "fa_icon": "fas fa-folder-open"
+                },
+                "prefix": {
+                    "type": "string",
+                    "description": "Prefix for output file names [default: SPADE; CAB internal: the SRM name or mergedSRMs_<n>].",
+                    "pattern": "^[A-Za-z0-9._-]+$",
+                    "fa_icon": "fas fa-tag"
+                }
+            },
+            "required": [
+                "meta",
+                "species",
+                "outdir"
+            ]
+        },
+        "differential_expression_options": {
+            "title": "Differential expression options",
+            "type": "object",
+            "fa_icon": "fas fa-chart-bar",
+            "description": "Normalization and filtering for limma-voom (changing these re-runs SPADE_DE).",
+            "properties": {
+                "ercc": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Use ERCC spike-in normalization when the count matrix has ERCC- rows. Without ERCC- rows (or with too few ERCC reads) the run uses library-size (TMM) normalization and says so in the log and report.",
+                    "fa_icon": "fas fa-vial"
+                },
+                "filter_noncoding": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Keep only protein-coding genes (bioType) with annotationLevel <= 3, when those columns exist. Set false to include non-coding genes.",
+                    "fa_icon": "fas fa-filter"
+                },
+                "cutoff_count": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "Raw count cutoff for low-expression filtering; 0 = automatic (median library size / 10 million, i.e. CPM 0.1).",
+                    "fa_icon": "fas fa-sort-numeric-up"
+                },
+                "cutoff_cpm": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "CPM cutoff for low-expression filtering; 0 = automatic, -1 = no filtering. Takes precedence over --cutoff_count.",
+                    "fa_icon": "fas fa-sort-numeric-up"
+                }
+            }
+        },
+        "report_options": {
+            "title": "Report options",
+            "type": "object",
+            "fa_icon": "fas fa-file-alt",
+            "description": "DEG cutoffs, plots and report header (changing these re-runs SPADE_REPORT only).",
+            "properties": {
+                "cutoff_log2fc": {
+                    "type": "number",
+                    "default": 1,
+                    "description": "|log2FC| cutoff to define DEGs.",
+                    "minimum": 0,
+                    "fa_icon": "fas fa-arrows-alt-v"
+                },
+                "cutoff_pvalue": {
+                    "type": "number",
+                    "default": 0.05,
+                    "description": "P.Value cutoff to define DEGs.",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percentage"
+                },
+                "cutoff_fdr": {
+                    "type": "number",
+                    "default": 0.05,
+                    "description": "FDR cutoff to define DEGs (top DEGs use FDR only).",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percentage"
+                },
+                "topn_deg": {
+                    "type": "integer",
+                    "default": 10,
+                    "minimum": 1,
+                    "description": "Number of top up- and down-regulated DEGs labelled in plots and shown in heatmaps.",
+                    "fa_icon": "fas fa-list-ol"
+                },
+                "num_gene_pca": {
+                    "type": "integer",
+                    "default": 3000,
+                    "minimum": 100,
+                    "description": "Number of most variable genes used for PCA.",
+                    "fa_icon": "fas fa-project-diagram"
+                },
+                "volcano": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Also save one volcano plot PDF per comparison.",
+                    "fa_icon": "fas fa-chart-area"
+                },
+                "project_name": {
+                    "type": "string",
+                    "description": "Project name shown in the report header.",
+                    "fa_icon": "fas fa-heading"
+                },
+                "pi_name": {
+                    "type": "string",
+                    "description": "PI name shown in the report header.",
+                    "fa_icon": "fas fa-user"
+                },
+                "project_lead": {
+                    "type": "string",
+                    "description": "Project lead(s) shown in the report header.",
+                    "fa_icon": "fas fa-user"
+                },
+                "lead_analysts": {
+                    "type": "string",
+                    "description": "Analyst(s) shown in the report header.",
+                    "fa_icon": "fas fa-user"
+                },
+                "group_lead": {
+                    "type": "string",
+                    "description": "Group lead shown in the CAB report header.",
+                    "fa_icon": "fas fa-user",
+                    "hidden": true
+                },
+                "contact_email": {
+                    "type": "string",
+                    "description": "Contact e-mail shown in the report header.",
+                    "fa_icon": "fas fa-envelope"
+                },
+                "department": {
+                    "type": "string",
+                    "description": "Department shown in the report header.",
+                    "fa_icon": "fas fa-building"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID shown in the report header.",
+                    "fa_icon": "fas fa-hashtag"
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "Project start date shown in the report header.",
+                    "fa_icon": "fas fa-calendar"
+                }
+            }
+        },
+        "enrichment_options": {
+            "title": "Enrichment options",
+            "type": "object",
+            "fa_icon": "fas fa-project-diagram",
+            "description": "fgsea with MSigDB gene sets and optional Enrichr.",
+            "properties": {
+                "run_fgsea": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run fgsea for every comparison and gene set.",
+                    "fa_icon": "fas fa-play"
+                },
+                "fgsea_gene_sets": {
+                    "type": "string",
+                    "description": "Comma-separated gene sets: 'default' (GO MF/BP/CC, cell type, canonical pathways, CGP, Hallmark, plus oncogenic signatures (human) or tumor phenotype (mouse)), names from assets/msigdb_gene_sets.csv, or MSigDB file stems such as c2.cp.reactome.",
+                    "default": "default",
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "fgsea_rank_metric": {
+                    "type": "string",
+                    "description": "Gene ranking for fgsea: t statistic, sign(log2FC)*-log10(P) or log2FC.",
+                    "default": "t",
+                    "enum": [
+                        "t",
+                        "logPval",
+                        "log2FC"
+                    ],
+                    "fa_icon": "fas fa-sort-amount-down"
+                },
+                "fgsea_pval_cutoff": {
+                    "type": "number",
+                    "default": 0.05,
+                    "description": "Keep pathways (fgsea) with P below this value.",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percentage"
+                },
+                "fgsea_top_n": {
+                    "type": "integer",
+                    "default": 10,
+                    "minimum": 5,
+                    "maximum": 25,
+                    "description": "Pathways/terms per enrichment plot (fgsea and Enrichr).",
+                    "fa_icon": "fas fa-list-ol"
+                },
+                "custom_gmt": {
+                    "type": "string",
+                    "description": "Comma-separated GMT files (gene symbols) to test in addition to MSigDB; required for --species other.",
+                    "fa_icon": "fas fa-file"
+                },
+                "msigdb_version": {
+                    "type": "string",
+                    "description": "MSigDB release of the GMT files.",
+                    "default": "2026.2",
+                    "pattern": "^\\d{4}\\.\\d+$",
+                    "fa_icon": "fas fa-code-branch"
+                },
+                "msigdb_dir": {
+                    "type": "string",
+                    "description": "Local directory with MSigDB GMT files (<stem>.v<version>.<Hs|Mm>.symbols.gmt), for compute environments without internet.",
+                    "format": "directory-path",
+                    "fa_icon": "fas fa-folder"
+                },
+                "msigdb_base_url": {
+                    "type": "string",
+                    "description": "Download location of MSigDB releases.",
+                    "default": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release",
+                    "hidden": true,
+                    "fa_icon": "fas fa-link"
+                },
+                "run_enrichr": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run Enrichr (web API; needs outbound internet from compute nodes).",
+                    "fa_icon": "fas fa-play"
+                },
+                "enrichr_dbs": {
+                    "type": "string",
+                    "description": "'standard' (newest Hallmark, GO BP/MF/CC, KEGG, Reactome libraries) or comma-separated Enrichr library names.",
+                    "default": "standard",
+                    "fa_icon": "fas fa-database"
+                },
+                "enrichr_top_genes": {
+                    "type": "integer",
+                    "default": 250,
+                    "enum": [
+                        100,
+                        250,
+                        500
+                    ],
+                    "description": "Genes submitted per direction (up, down).",
+                    "fa_icon": "fas fa-list-ol"
+                },
+                "enrichr_rank_metric": {
+                    "type": "string",
+                    "description": "Gene ranking used to pick Enrichr input genes.",
+                    "default": "t",
+                    "enum": [
+                        "t",
+                        "logPval"
+                    ],
+                    "fa_icon": "fas fa-sort-amount-down"
+                }
+            }
+        },
+        "cab_internal_options": {
+            "title": "CAB internal options",
+            "type": "object",
+            "fa_icon": "fas fa-building",
+            "description": "St. Jude CAB only: AutoMapper inputs, multi-SRM merge and CAB report branding.",
+            "properties": {
+                "cab_internal": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "CAB internal mode: allows the options below and uses the CAB report branding (logo, wiki links).",
+                    "fa_icon": "fas fa-toggle-on"
+                },
+                "input": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "CSV with one row per AutoMapper SRM: srm, counts, and optional report, tpm, fpkm. Several rows are merged.",
+                    "pattern": "^\\S+\\.(csv|tsv)$",
+                    "schema": "assets/schema_input.json",
+                    "mimetype": "text/csv",
+                    "fa_icon": "fas fa-file-csv"
+                },
+                "automapper_dir": {
+                    "type": "string",
+                    "description": "AutoMapper output directory; files are found as <dir>/<SRM>/<SRM>_RSEM_count.txt and <SRM>*.report.",
+                    "format": "directory-path",
+                    "fa_icon": "fas fa-folder"
+                },
+                "srm": {
+                    "type": "string",
+                    "description": "SRM name(s) for --automapper_dir; join several with '_' to merge them (e.g. SRM1_SRM2).",
+                    "pattern": "^[A-Za-z0-9._-]+$",
+                    "fa_icon": "fas fa-tag"
+                },
+                "mapping_report": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "AutoMapper <SRM>.report file for the mapping QC tables.",
+                    "pattern": "^\\S+\\.report$",
+                    "fa_icon": "fas fa-file-alt"
+                },
+                "mapping_qc": {
+                    "type": "string",
+                    "description": "Overall mapping QC call shown in the CAB report overview (e.g. good).",
+                    "fa_icon": "fas fa-check"
+                }
+            }
+        },
+        "software_options": {
+            "title": "Software options",
+            "type": "object",
+            "fa_icon": "fas fa-box",
+            "description": "Container with R, Bioconductor and the SPADE function files.",
+            "properties": {
+                "spade_version": {
+                    "type": "string",
+                    "description": "SPADE release in the container (shown in the report).",
+                    "default": "3.0.1",
+                    "fa_icon": "fas fa-code-branch"
+                },
+                "spade_container": {
+                    "type": "string",
+                    "description": "Container image with R, Bioconductor and SPADE in /opt/spade.",
+                    "default": "ghcr.io/hongjianjin/spade:3.0.1",
+                    "fa_icon": "fab fa-docker"
+                }
+            }
+        },
+        "institutional_config_options": {
+            "title": "Institutional config options",
+            "type": "object",
+            "fa_icon": "fas fa-university",
+            "description": "Parameters used to describe centralised config profiles. These should not be edited.",
+            "help_text": "The centralised nf-core configuration profiles use a handful of pipeline parameters to describe themselves. This information is then printed to the Nextflow log when you run a pipeline. You should not need to change these values when you run a pipeline.",
+            "properties": {
+                "custom_config_version": {
+                    "type": "string",
+                    "description": "Git commit id for Institutional configs.",
+                    "default": "master",
+                    "hidden": true,
+                    "fa_icon": "fas fa-users-cog"
+                },
+                "custom_config_base": {
+                    "type": "string",
+                    "description": "Base directory for Institutional configs.",
+                    "default": "https://raw.githubusercontent.com/nf-core/configs/master",
+                    "hidden": true,
+                    "help_text": "If you're running offline, Nextflow will not be able to fetch the institutional config files from the internet. If you don't need them, then this is not a problem. If you do need them, you should download the files from the repo and tell Nextflow where to find them with this parameter.",
+                    "fa_icon": "fas fa-users-cog"
+                },
+                "config_profile_name": {
+                    "type": "string",
+                    "description": "Institutional config name.",
+                    "hidden": true,
+                    "fa_icon": "fas fa-users-cog"
+                },
+                "config_profile_description": {
+                    "type": "string",
+                    "description": "Institutional config description.",
+                    "hidden": true,
+                    "fa_icon": "fas fa-users-cog"
+                },
+                "config_profile_contact": {
+                    "type": "string",
+                    "description": "Institutional config contact information.",
+                    "hidden": true,
+                    "fa_icon": "fas fa-users-cog"
+                },
+                "config_profile_url": {
+                    "type": "string",
+                    "description": "Institutional config URL link.",
+                    "hidden": true,
+                    "fa_icon": "fas fa-users-cog"
+                }
+            }
+        },
+        "generic_options": {
+            "title": "Generic options",
+            "type": "object",
+            "fa_icon": "fas fa-file-import",
+            "description": "Less common options for the pipeline, typically set in a config file.",
+            "properties": {
+                "version": {
+                    "type": "boolean",
+                    "description": "Display version and exit.",
+                    "fa_icon": "fas fa-question-circle",
+                    "hidden": true
+                },
+                "publish_dir_mode": {
+                    "type": "string",
+                    "default": "copy",
+                    "description": "Method used to save pipeline results to output directory.",
+                    "fa_icon": "fas fa-copy",
+                    "enum": [
+                        "symlink",
+                        "rellink",
+                        "link",
+                        "copy",
+                        "copyNoFollow",
+                        "move"
+                    ],
+                    "hidden": true
+                },
+                "monochrome_logs": {
+                    "type": "boolean",
+                    "description": "Do not use coloured log outputs.",
+                    "fa_icon": "fas fa-palette",
+                    "hidden": true
+                },
+                "validate_params": {
+                    "type": "boolean",
+                    "description": "Boolean whether to validate parameters against the schema at runtime",
+                    "default": true,
+                    "fa_icon": "fas fa-check-square",
+                    "hidden": true
+                },
+                "trace_report_suffix": {
+                    "type": "string",
+                    "fa_icon": "far calendar",
+                    "description": "Suffix to add to the trace report filename. Default is the date and time in the format yyyy-MM-dd_HH-mm-ss.",
+                    "hidden": true
+                },
+                "help": {
+                    "type": [
+                        "boolean",
+                        "string"
+                    ],
+                    "description": "Display the help message."
+                },
+                "help_full": {
+                    "type": "boolean",
+                    "description": "Display the full detailed help message."
+                },
+                "show_hidden": {
+                    "type": "boolean",
+                    "description": "Display hidden parameters in the help message (only works when --help or --help_full are provided)."
+                }
+            }
+        }
+    },
+    "allOf": [
+        {
+            "$ref": "#/$defs/input_output_options"
+        },
+        {
+            "$ref": "#/$defs/differential_expression_options"
+        },
+        {
+            "$ref": "#/$defs/report_options"
+        },
+        {
+            "$ref": "#/$defs/enrichment_options"
+        },
+        {
+            "$ref": "#/$defs/cab_internal_options"
+        },
+        {
+            "$ref": "#/$defs/software_options"
+        },
+        {
+            "$ref": "#/$defs/institutional_config_options"
+        },
+        {
+            "$ref": "#/$defs/generic_options"
+        }
+    ]
+}

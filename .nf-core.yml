@@ -1,0 +1,16 @@
+repository_type: pipeline
+template:
+  name: SPADE-nf
+  org: hongjianjin
+  description: ERCC spike-in aware RNA-seq differential expression and enrichment with SPADE
+  author: Hongjian Jin
+  version: 3.0.1
+  is_nfcore: false
+  skip_features:
+    - igenomes
+    - multiqc
+    - fastqc
+    - email
+    - slackreport
+    - adaptivecard
+    - seqera_platform

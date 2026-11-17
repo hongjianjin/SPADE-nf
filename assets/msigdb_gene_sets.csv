@@ -1,0 +1,18 @@
+# fgsea gene sets: short name -> MSigDB GMT file stem for Human (Hs) and Mouse (Mm) releases.
+# File: <stem>.v<msigdb_version>.<Hs|Mm>.symbols.gmt  (checked for v2026.2 on 2026-11-17)
+# default=yes rows run with --fgsea_gene_sets default; an empty stem means "not for this species".
+name,label,human,mouse,default
+GO_MF,GO Molecular Function,c5.go.mf,m5.go.mf,yes
+GO_BP,GO Biological Process,c5.go.bp,m5.go.bp,yes
+GO_CC,GO Cellular Component,c5.go.cc,m5.go.cc,yes
+CellType,Cell type signature gene sets,c8.all,m8.all,yes
+CanonicalPathway,Canonical pathways,c2.cp,m2.cp,yes
+CGP,Chemical and genetic perturbations,c2.cgp,m2.cgp,yes
+Hallmark,Hallmark gene sets,h.all,mh.all,yes
+OncogenicSignatures,Oncogenic signature gene sets (human),c6.all,,yes
+TumorPhenotype,Tumor phenotype ontology (mouse),,m5.mpo.mpt,yes
+Reactome,Reactome pathways,c2.cp.reactome,m2.cp.reactome,no
+WikiPathways,WikiPathways,c2.cp.wikipathways,m2.cp.wikipathways,no
+KEGG_MEDICUS,KEGG MEDICUS (human),c2.cp.kegg_medicus,,no
+Immunologic,Immunologic signatures (human),c7.all,,no
+TFT,Transcription factor targets (GTRD),c3.tft.gtrd,m3.gtrd,no

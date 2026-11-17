@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.bam binary
+*.png binary
+*.gmt text eol=lf
